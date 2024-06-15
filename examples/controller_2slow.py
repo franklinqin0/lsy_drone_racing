@@ -1,30 +1,3 @@
-"""Write your control strategy.
-
-Then run:
-
-    $ python scripts/sim --config config/getting_started.yaml
-
-Tips:
-    Search for strings `INSTRUCTIONS:` and `REPLACE THIS (START)` in this file.
-
-    Change the code between the 5 blocks starting with
-        #########################
-        # REPLACE THIS (START) ##
-        #########################
-    and ending with
-        #########################
-        # REPLACE THIS (END) ####
-        #########################
-    with your own code.
-
-    They are in methods:
-        1) __init__
-        2) compute_control
-        3) step_learn (optional)
-        4) episode_learn (optional)
-
-"""
-
 from __future__ import annotations  # Python 3.10 type hints
 
 import numpy as np
@@ -33,7 +6,93 @@ from scipy import interpolate
 from lsy_drone_racing.command import Command
 from lsy_drone_racing.controller import BaseController
 from lsy_drone_racing.utils import draw_trajectory
+# from safe_control_gym.controllers import PID
+from safe_control_gym.controllers.lqr.lqr import LQR
+# from safe_control_gym.envs.benchmark_env import Task
 
+import heapq
+
+class AStarNode:
+    def __init__(self, position, parent=None, g=0, h=0, f=0):
+        self.position = tuple(position)  # Convert position to tuple
+        self.parent = parent
+        self.g = g  # cost from start to current node
+        self.h = h  # heuristic cost from current node to end
+        self.f = f  # total cost
+
+    def __lt__(self, other):
+        return self.f < other.f
+
+def heuristic(a, b): #用于估计从一个位置到另一个位置的代价, 欧几里得距离作为启发式函数。
+    return np.linalg.norm(np.array(a) - np.array(b)) 
+
+
+def astar(start, end, obstacles):
+    open_list = []
+    closed_list = set()
+    start_node = AStarNode(start)
+    end_node = AStarNode(end)
+    heapq.heappush(open_list, start_node)
+    # print("the headq - open_list: ", open_list)
+   
+
+    while open_list:
+        current_node = heapq.heappop(open_list)
+        closed_list.add(current_node.position)
+
+        if current_node.position == end_node.position:
+            path = []
+            while current_node:
+                path.append(current_node.position)
+                current_node = current_node.parent
+            return path[::-1]  # Return reversed path
+
+        neighbors = [
+            (current_node.position[0] + dx, current_node.position[1] + dy, current_node.position[2] + dz)
+            for dx, dy, dz in [(-0.1, 0, 0), (0.1, 0, 0), (0, -0.1, 0), (0, 0.1, 0), (0, 0, -0.1), (0, 0, 0.1)]
+        ]
+
+        for next_position in neighbors:
+            if next_position in closed_list or not is_valid_position(next_position, obstacles):
+                continue
+
+            g = current_node.g + heuristic(current_node.position, next_position)
+            h = heuristic(next_position, end_node.position)
+            f = g + h
+            neighbor_node = AStarNode(next_position, current_node, g, h, f)
+
+            if add_to_open(open_list, neighbor_node):
+                heapq.heappush(open_list, neighbor_node)
+
+    return None  # if No path found
+
+def is_valid_position(position, obstacles):
+    for obs in obstacles:
+        if heuristic(position, obs) < 0.2:  # Distance threshold for considering a position as colliding with an obstacle
+            return False
+    return True
+
+def add_to_open(open_list, neighbor_node):
+    for node in open_list:
+        if neighbor_node.position == node.position and neighbor_node.f >= node.f:
+            return False
+    return True
+
+def find_path(start, end, gates, obstacles):
+    path = []
+    waypoints =[start] + gates + [end] # 正常输出了
+    # print("waypoints of def find_path: ", waypoints)
+
+    for i in range(len(waypoints) - 1):
+        segment = astar(waypoints[i], waypoints[i + 1], obstacles)
+        print("segment in def findpath: ", segment)
+        if segment is None:
+            print(f"Path segment from {waypoints[i]} to {waypoints[i+1]} not found")
+            return None
+        path.extend(segment[:-1])  # Exclude last point to avoid duplication
+
+    path.append(end)
+    return path
 
 class Controller(BaseController):
     """Template controller class."""
@@ -49,7 +108,7 @@ class Controller(BaseController):
 
         INSTRUCTIONS:
             The controller's constructor has access the initial state `initial_obs` and the a priori
-            infromation contained in dictionary `initial_info`. Use this method to initialize
+            information contained in dictionary `initial_info`. Use this method to initialize
             constants, counters, pre-plan trajectories, etc.
 
         Args:
@@ -80,50 +139,28 @@ class Controller(BaseController):
         # REPLACE THIS (START) ##
         #########################
 
-        # Example: Hard-code waypoints through the gates. Obviously this is a crude way of
-        # completing the challenge that is highly susceptible to noise and does not generalize at
-        # all. It is meant solely as an example on how the drones can be controlled
-        waypoints = []
-        waypoints.append([self.initial_obs[0], self.initial_obs[2], 0.3])
-        gates = self.NOMINAL_GATES
-        z_low = initial_info["gate_dimensions"]["low"]["height"]
-        z_high = initial_info["gate_dimensions"]["tall"]["height"]
-        waypoints.append([1, 0, z_low])
-        waypoints.append([gates[0][0] + 0.2, gates[0][1] + 0.1, z_low])
-        waypoints.append([gates[0][0] + 0.1, gates[0][1], z_low])
-        waypoints.append([gates[0][0] - 0.1, gates[0][1], z_low])
-        waypoints.append(
-            [
-                (gates[0][0] + gates[1][0]) / 2 - 0.7,
-                (gates[0][1] + gates[1][1]) / 2 - 0.3,
-                (z_low + z_high) / 2,
-            ]
-        )
-        waypoints.append(
-            [
-                (gates[0][0] + gates[1][0]) / 2 - 0.5,
-                (gates[0][1] + gates[1][1]) / 2 - 0.6,
-                (z_low + z_high) / 2,
-            ]
-        )
-        waypoints.append([gates[1][0] - 0.3, gates[1][1] - 0.2, z_high])
-        waypoints.append([gates[1][0] + 0.2, gates[1][1] + 0.2, z_high])
-        waypoints.append([gates[2][0], gates[2][1] - 0.4, z_low])
-        waypoints.append([gates[2][0], gates[2][1] + 0.1, z_low])
-        waypoints.append([gates[2][0], gates[2][1] + 0.1, z_high + 0.2])
-        waypoints.append([gates[3][0], gates[3][1] + 0.1, z_high])
-        waypoints.append([gates[3][0], gates[3][1] - 0.1, z_high + 0.1])
-        waypoints.append(
-            [
-                initial_info["x_reference"][0],
-                initial_info["x_reference"][2],
-                initial_info["x_reference"][4],
-            ]
-        )
-        waypoints = np.array(waypoints)
+        initial_pos = [self.initial_obs[0], self.initial_obs[2], 0.3]
+        # goal_pos = initial_info["task_info"]["stabilization_goal"]
+        goal_pos = [ # 终点， 来自initial_info
+            initial_info["x_reference"][0],
+            initial_info["x_reference"][2],
+            initial_info["x_reference"][4],
+        ]
+        # gates = [[gate[0], gate[1], gate[2]] for gate in self.NOMINAL_GATES]
+        # print("gates: ", gates) # [[0.45, -1.0, 0], [1.0, -1.55, 0], [0.0, 0.5, 0], [-0.5, -0.5, 0]]
+        # obstacles = [[obs[0], obs[1], obs[2]] for obs in self.NOMINAL_OBSTACLES]
+        gates = [gate[ :3] for gate in self.NOMINAL_GATES] # first 3 dims - x y z
+        # print("gates: ", gates) 
+        obstacles = [obstacle[ :3] for obstacle in self.NOMINAL_OBSTACLES]
 
-        tck, u = interpolate.splprep([waypoints[:, 0], waypoints[:, 1], waypoints[:, 2]], s=0.1) #找到N-D 曲线的B-spline 表示。
-        self.waypoints = waypoints
+        path = find_path(tuple(initial_pos), tuple(goal_pos), [tuple(g) for g in gates], [tuple(o) for o in obstacles])
+        if path is None:
+            raise ValueError("No valid path found")
+
+        path = np.array(path)
+        print("path found !!!!!!!!!! : /n", path)
+        tck, u = interpolate.splprep([path[:, 0], path[:, 1], path[:, 2]], s=0.1)
+        self.path = path
         duration = 12
         t = np.linspace(0, 1, int(duration * self.CTRL_FREQ))
         self.ref_x, self.ref_y, self.ref_z = interpolate.splev(t, tck)
@@ -131,11 +168,12 @@ class Controller(BaseController):
 
         if self.VERBOSE:
             # Draw the trajectory on PyBullet's GUI.
-            draw_trajectory(initial_info, self.waypoints, self.ref_x, self.ref_y, self.ref_z)
+            draw_trajectory(initial_info, self.path, self.ref_x, self.ref_y, self.ref_z)
 
         self._take_off = False
         self._setpoint_land = False
         self._land = False
+
         #########################
         # REPLACE THIS (END) ####
         #########################
@@ -191,9 +229,13 @@ class Controller(BaseController):
             # Notify set point stop has to be called every time we transition from low-level
             # commands to high-level ones. Prepares for landing
             elif step >= len(self.ref_x) and not self._setpoint_land:
-                command_type = Command.NOTIFYSETPOINTSTOP
+                command_type = Command.SETPOINT_STOP
                 args = []
                 self._setpoint_land = True
+            # elif self._setpoint_land and not self._land:
+            #     command_type = Command.LAND
+            #     args = [self.ref_x[-1], self.ref_y[-1], 0.0, 2]  # X, Y, Z, duration
+            #     self._land = True
             elif step >= len(self.ref_x) and not self._land:
                 command_type = Command.LAND
                 args = [0.0, 2.0]  # Height, duration

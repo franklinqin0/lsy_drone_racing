@@ -29,8 +29,10 @@ logger = logging.getLogger(__name__)
 
 
 def simulate(
-    config: str = "config/getting_started.yaml",
-    controller: str = "examples/controller.py",
+    # config: str = "config/getting_started.yaml", 
+    config: str = "/media/varda/Dolphin/repos/lsy_drone_racing/config/level0.yaml",
+    controller: str = "examples/controller_shiyao_v2.py",
+    # controller: str = "examples/controller.py",
     n_runs: int = 1,
     gui: bool = True,
     terminate_on_lap: bool = True,
@@ -65,7 +67,7 @@ def simulate(
     # The env.step is called at a firmware_freq rate, but this is not as intuitive to the end
     # user, and so we abstract the difference. This allows ctrl_freq to be the rate at which the
     # user sends ctrl signals, not the firmware.
-    config.quadrotor_config["ctrl_freq"] = FIRMWARE_FREQ
+    config.quadrotor_config["ctrl_freq"] = FIRMWARE_FREQ # TODO: 需要user发控制指令吗？ 不，程序自己算
     env_func = partial(make, "quadrotor", **config.quadrotor_config)
     wrapped_env = make("firmware", env_func, FIRMWARE_FREQ, CTRL_FREQ)
     env = wrapped_env.env
